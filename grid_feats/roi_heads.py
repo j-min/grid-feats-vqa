@@ -96,7 +96,10 @@ class AttributeRes5ROIHeads(AttributeROIHeads, Res5ROIHeads):
     """
 
     def __init__(self, cfg, input_shape):
-        super(Res5ROIHeads, self).__init__(cfg, input_shape)
+        # super(Res5ROIHeads, self).__init__(cfg, input_shape)
+        super(Res5ROIHeads, self).__init__(cfg)
+
+        self.in_features = cfg.MODEL.ROI_HEADS.IN_FEATURES
 
         assert len(self.in_features) == 1
 
@@ -191,6 +194,9 @@ class AttributeStandardROIHeads(AttributeROIHeads, StandardROIHeads):
 
     def __init__(self, cfg, input_shape):
         super(StandardROIHeads, self).__init__(cfg, input_shape)
+        # super(StandardROIHeads, self).__init__(input_shape)
+
+
         self._init_box_head(cfg, input_shape)
         self._init_mask_head(cfg, input_shape)
         self._init_keypoint_head(cfg, input_shape)

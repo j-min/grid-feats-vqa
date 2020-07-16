@@ -95,37 +95,46 @@ class AttributeDatasetMapper(DatasetMapper):
         super().__init__(cfg, is_train)
 
         # fmt: off
-        self.attribute_on      = cfg.MODEL.ATTRIBUTE_ON
+        self.use_attribute      = cfg.MODEL.ATTRIBUTE_ON
         self.max_attr_per_ins  = cfg.INPUT.MAX_ATTR_PER_INS
         # fmt: on
 
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)
-        image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
+        image = utils.read_image(dataset_dict["file_name"], format=self.image_format)
         utils.check_image_size(dataset_dict, image)
 
-        if "annotations" not in dataset_dict:
-            image, transforms = T.apply_transform_gens(
-                ([self.crop_gen] if self.crop_gen else []) + self.tfm_gens, image
-            )
+        # if "annotations" not in dataset_dict:
+        #     image, transforms = T.apply_augmentations(
+        #         ([self.crop] if self.crop else []) + self.augmentations, image
+        #     )
+        if "sem_seg_file_name" in dataset_dict:
+            sem_seg_gt = utils.read_image(dataset_dict.pop("sem_seg_file_name"), "L").squeeze(2)
         else:
-            if self.crop_gen:
-                crop_tfm = utils.gen_crop_transform_with_instance(
-                    self.crop_gen.get_crop_size(image.shape[:2]),
-                    image.shape[:2],
-                    np.random.choice(dataset_dict["annotations"]),
-                )
-                image = crop_tfm.apply_image(image)
-            image, transforms = T.apply_transform_gens(self.tfm_gens, image)
-            if self.crop_gen:
-                transforms = crop_tfm + transforms
+            # if self.crop:
+            #     crop_tfm = utils.gen_crop_transform_with_instance(
+            #         self.crop.get_crop_size(image.shape[:2]),
+            #         image.shape[:2],
+            #         np.random.choice(dataset_dict["annotations"]),
+            #     )
+            #     image = crop_tfm.apply_image(image)
+            # image, transforms = T.apply_augmentations(self.augmentations, image)
+            # if self.crop:
+            #     transforms = crop_tfm + transforms
+            sem_seg_gt = None
+
+        aug_input = T.StandardAugInput(image, sem_seg=sem_seg_gt)
+        transforms = aug_input.apply_augmentations(self.augmentations)
+        image, sem_seg_gt = aug_input.image, aug_input.sem_seg
 
         image_shape = image.shape[:2]
-        dataset_dict["image"] = torch.as_tensor(
-            np.ascontiguousarray(image.transpose(2, 0, 1))
-        )
 
-        if self.load_proposals:
+        dataset_dict["image"] = torch.as_tensor(np.ascontiguousarray(image.transpose(2, 0, 1)))
+
+        if sem_seg_gt is not None:
+            dataset_dict["sem_seg"] = torch.as_tensor(sem_seg_gt.astype("long"))
+
+        if self.proposal_topk is not None:
             utils.transform_proposals(
                 dataset_dict,
                 image_shape,
@@ -141,11 +150,11 @@ class AttributeDatasetMapper(DatasetMapper):
 
         if "annotations" in dataset_dict:
             for anno in dataset_dict["annotations"]:
-                if not self.mask_on:
+                if not self.use_instance_mask:
                     anno.pop("segmentation", None)
-                if not self.keypoint_on:
+                if not self.use_keypoint:
                     anno.pop("keypoints", None)
-                if not self.attribute_on:
+                if not self.use_attribute:
                     anno.pop("attribute_ids")
 
             annos = [
@@ -161,21 +170,22 @@ class AttributeDatasetMapper(DatasetMapper):
             instances = annotations_to_instances_with_attributes(
                 annos,
                 image_shape,
-                mask_format=self.mask_format,
-                load_attributes=self.attribute_on,
+                mask_format=self.instance_mask_format,
+                load_attributes=self.use_attribute,
                 max_attr_per_ins=self.max_attr_per_ins,
             )
-            if self.crop_gen and instances.has("gt_masks"):
+            # if self.crop and instances.has("gt_masks"):
+            if self.recompute_boxes:
                 instances.gt_boxes = instances.gt_masks.get_bounding_boxes()
             dataset_dict["instances"] = utils.filter_empty_instances(instances)
 
-        if "sem_seg_file_name" in dataset_dict:
-            with PathManager.open(dataset_dict.pop("sem_seg_file_name"), "rb") as f:
-                sem_seg_gt = Image.open(f)
-                sem_seg_gt = np.asarray(sem_seg_gt, dtype="uint8")
-            sem_seg_gt = transforms.apply_segmentation(sem_seg_gt)
-            sem_seg_gt = torch.as_tensor(sem_seg_gt.astype("long"))
-            dataset_dict["sem_seg"] = sem_seg_gt
+        # if "sem_seg_file_name" in dataset_dict:
+        #     with PathManager.open(dataset_dict.pop("sem_seg_file_name"), "rb") as f:
+        #         sem_seg_gt = Image.open(f)
+        #         sem_seg_gt = np.asarray(sem_seg_gt, dtype="uint8")
+        #     sem_seg_gt = transforms.apply_segmentation(sem_seg_gt)
+        #     sem_seg_gt = torch.as_tensor(sem_seg_gt.astype("long"))
+        #     dataset_dict["sem_seg"] = sem_seg_gt
         return dataset_dict
 
 
@@ -190,25 +200,25 @@ class TestDatasetMapper(DatasetMapper):
     def __call__(self, dataset_dict):
         dataset_dict = copy.deepcopy(dataset_dict)
         try:
-            image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
+            image = utils.read_image(dataset_dict["file_name"], format=self.image_format)
             utils.check_image_size(dataset_dict, image)
         except OSError:
             return
 
         if "annotations" not in dataset_dict:
-            image, transforms = T.apply_transform_gens(
-                ([self.crop_gen] if self.crop_gen else []) + self.tfm_gens, image
+            image, transforms = T.apply_augmentations(
+                ([self.crop] if self.crop else []) + self.augmentations, image
             )
         else:
-            if self.crop_gen:
+            if self.crop:
                 crop_tfm = utils.gen_crop_transform_with_instance(
-                    self.crop_gen.get_crop_size(image.shape[:2]),
+                    self.crop.get_crop_size(image.shape[:2]),
                     image.shape[:2],
                     np.random.choice(dataset_dict["annotations"]),
                 )
                 image = crop_tfm.apply_image(image)
-            image, transforms = T.apply_transform_gens(self.tfm_gens, image)
-            if self.crop_gen:
+            image, transforms = T.apply_augmentations(self.augmentations, image)
+            if self.crop:
                 transforms = crop_tfm + transforms
 
         image_shape = image.shape[:2]
